@@ -1,0 +1,139 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 5001 --reload
+    ports:
+      - "5001:5001"
+      - "8000:5001"
+    environment:
+      POSTGRES_SERVER: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ingestify
+      POSTGRES_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_BASE_DIR: /app/storage
+      UPLOAD_DIR: /app/storage/uploads
+      ARTIFACT_DIR: /app/storage/artifacts
+      THUMBNAIL_DIR: /app/storage/thumbnails
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - shared-storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-default:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker -l info -Q default -c 2 -n worker_default@%h
+    environment:
+      POSTGRES_SERVER: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ingestify
+      POSTGRES_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_BASE_DIR: /app/storage
+      UPLOAD_DIR: /app/storage/uploads
+      ARTIFACT_DIR: /app/storage/artifacts
+      THUMBNAIL_DIR: /app/storage/thumbnails
+    volumes:
+      - ./app:/app/app
+      - shared-storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-priority:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker -l info -Q high-priority,default -c 4 -n worker_priority@%h
+    environment:
+      POSTGRES_SERVER: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ingestify
+      POSTGRES_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_BASE_DIR: /app/storage
+      UPLOAD_DIR: /app/storage/uploads
+      ARTIFACT_DIR: /app/storage/artifacts
+      THUMBNAIL_DIR: /app/storage/thumbnails
+    volumes:
+      - ./app:/app/app
+      - shared-storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker-default:
+        condition: service_started
+      worker-priority:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ingestify
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ingestify"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  shared-storage:
+  pg-data:
+  redis-data:
